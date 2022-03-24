@@ -93,7 +93,7 @@ type duration struct {
 }
 
 // now always returns the current time.
-var now = func() time.Time { return time.Now() }
+var now = func() time.Time { return time.Now().UTC() }
 
 // newSched sets up a new scheduler with given context.
 func newSched(repeat bool, ctx context.Context) schedule {

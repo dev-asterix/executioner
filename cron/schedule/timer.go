@@ -141,8 +141,9 @@ func (t *Timer) set(units timeUnit, val int) {
 }
 
 // Init the scheduler and prepare for run
-func (t Timer) Next() (Scheduler, error) {
-	next, err := t.dur.nextDate()
+func (t Timer) Next() (sched Scheduler, err error) {
+	var next time.Time
+	next, t.dur, err = t.dur.nextDate()
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +153,7 @@ func (t Timer) Next() (Scheduler, error) {
 }
 
 // nextDate sets the next date of execution for the scheduler based on the time unit.
-func (d *duration) nextDate() (next time.Time, err error) {
+func (d *duration) nextDate() (next time.Time, dur *duration, err error) {
 
 	// validate duration for time based scheduler
 	if err = d.validate(); err != nil {
@@ -160,23 +161,29 @@ func (d *duration) nextDate() (next time.Time, err error) {
 	}
 
 	// set the next date of scheduler
-	if next, err = d.findNextDate(); err != nil {
+	if next, dur, err = d.findNextDate(); err != nil {
 		return
 	}
 
 	// validate date
-	if !next.After(now()) {
-		return next, fmt.Errorf("date must be after %s, given %s", now().Format(time.RFC3339), next.Format(time.RFC3339))
+	if !next.After(now()) || !next.After(now().Add(time.Minute)) {
+		return next, dur, fmt.Errorf("date must be after %s, given %s", now().Format(time.RFC3339), next.Format(time.RFC3339))
 	}
 	return
 }
 
 // findNextDate returns the next date of execution for the scheduler based on the time unit.
-func (d *duration) findNextDate() (updatedNext time.Time, err error) {
+func (d *duration) findNextDate() (updatedNext time.Time, durNext *duration, err error) {
 
-	next := time.Date(d.Year, time.Month(d.Month), d.date, d.Hour, d.Minute, d.Second, d.Nsec, d.location)
+	fmt.Printf("building next: %d, %d, %d, %d, %d, %d, %d, %v\n", d.Year, time.Month(d.Month), d.date, d.Hour, d.Minute, d.Second, d.Nsec, d.location)
+	next := time.Date(
+		normalize(d.Year), time.Month(normalize(d.Month)), normalize(d.date),
+		normalize(d.Hour), normalize(d.Minute), normalize(d.Second),
+		normalize(d.Nsec), d.location,
+	)
+	fmt.Println("next:", next, d)
 	// durNext is the duration of next date of scheduler
-	durNext := duration{
+	durNext = &duration{
 		Year:     next.Year(),
 		Month:    int(next.Month()),
 		Week:     d.Week,
@@ -188,48 +195,68 @@ func (d *duration) findNextDate() (updatedNext time.Time, err error) {
 		Nsec:     next.Nanosecond(),
 		location: next.Location(),
 	}
+	fmt.Printf("durNext: %+v\n", durNext)
 
 	if d.Year == Every || d.Year < 1 {
 		durNext.Year = now().Year()
-
-		// update the scheduler timer, if error is returned, then return the error.
-		next, err = durNext.update(year, next)
-		if err != nil {
-			return
-		}
 	}
 	if d.Month == Every || d.Month < int(January) {
 		durNext.Month = int(now().Month())
-		durNext.update(month, next)
 	}
 	if d.Day == Every || d.Day < int(Sunday) {
 		durNext.Day = int(now().Weekday())
-		durNext.update(day, next)
 	}
 	if d.date == Every || d.date < 1 {
 		durNext.date = now().Day()
-		durNext.update(date, next)
 	}
 	if d.Hour == Every || d.Hour < 0 {
 		durNext.Hour = now().Hour()
-		durNext.update(hour, next)
 	}
 	if d.Minute == Every || d.Minute < 0 {
 		durNext.Minute = now().Minute()
-		durNext.update(minute, next)
 	}
 	if d.Second == Every || d.Second < 0 {
 		durNext.Second = now().Second()
-		durNext.update(second, next)
 	}
+
+	timeUnits := []timeUnit{second, minute, hour, day, date, month, year}
+	// for each time unit identify the next schedule time available
+	for i, unit := range timeUnits {
+		var updatedDur duration
+
+		// update the scheduler timer, if error is returned, then return the error.
+		next, updatedDur, err = durNext.update(unit, next)
+		// if no errors are returned, it has successfully identified the next schedule time. break loop and set scheduler
+		if err == nil {
+			*durNext = updatedDur
+			break
+		}
+		// if error is returned and the time unit is year, then return the error.
+		// since no more time units are available to identify the next schedule time.
+		if err != nil && i == len(timeUnits)-1 {
+			return
+		}
+		fmt.Println(unit, durNext, next)
+	}
+
+	// set the next date of scheduler
 	updatedNext = time.Date(durNext.Year, time.Month(durNext.Month), durNext.date, durNext.Hour, durNext.Minute, durNext.Second, durNext.Nsec, durNext.location)
+	fmt.Println("updatedNext:", updatedNext, now(), durNext)
 	return
+}
+
+// normalize corrects the time to avoid negative timestamp on next scheduler.
+func normalize(v int) int {
+	if v <= 0 {
+		return 1
+	}
+	return v
 }
 
 // update updates the next date of scheduler based on the time unit.
 // It is used to update the next date of scheduler when the time unit is set to Every.
 // If updated time is in the past, it will update the next date of scheduler to next time unit.
-func (d *duration) update(units timeUnit, next time.Time) (time.Time, error) {
+func (d duration) update(units timeUnit, next time.Time) (time.Time, duration, error) {
 
 	var attemptsRem = 100
 
@@ -238,11 +265,12 @@ reschedule: // reschedule reruns the logic until a valid time is found
 
 	// if no more attempts are left, then return the error
 	if attemptsRem <= 0 {
-		return time.Time{}, fmt.Errorf("unable to find a valid upcoming date which can be scheduled matching given conditions.")
+		return time.Time{}, d, fmt.Errorf("unable to find a valid upcoming date which can be scheduled matching given conditions.")
 	}
 
 	// set the next date of scheduler
 	next = time.Date(d.Year, time.Month(d.Month), d.date, d.Hour, d.Minute, d.Second, d.Nsec, d.location)
+	fmt.Printf("\tnext: %+v, %+v, %+v\n", next, now(), d)
 
 	// check if the next date is in the past
 	if now().After(next) {
@@ -271,7 +299,10 @@ reschedule: // reschedule reruns the logic until a valid time is found
 		case date:
 			// update the date to next
 			d.date++
-
+			d.Day++
+			if d.Day > 6 {
+				d.Day = 0
+			}
 			// check overflow
 			d.validateDate()
 			goto reschedule
@@ -302,7 +333,7 @@ reschedule: // reschedule reruns the logic until a valid time is found
 
 		}
 	}
-	return next, nil
+	return next, d, nil
 }
 
 // daysOfMonth returns the number of days in the given month of the year.
@@ -340,6 +371,10 @@ func (d *duration) validateHour() {
 	if d.Hour > 23 {
 		d.Hour = 0
 		d.date++
+		d.Day++
+		if d.Day > 6 {
+			d.Day = 0
+		}
 		d.validateDate()
 	}
 }
@@ -392,6 +427,29 @@ func (d *duration) validate() error {
 	// validate nanosecond
 	if d.Nsec > 999999999 {
 		return fmt.Errorf("nanosecond must be between 0 and 999999999 or schedule.Every which represents every nanosecond")
+	}
+
+	// check if the duration is not set
+	if d.Year == 0 {
+		d.Year = Every
+	}
+	if d.Month == 0 {
+		d.Month = Every
+	}
+	if d.date == 0 {
+		d.date = Every
+	}
+	if d.Day == 0 {
+		d.Day = Every
+	}
+	if d.Hour == 0 {
+		d.Hour = Every
+	}
+	if d.Minute == 0 {
+		d.Minute = Every
+	}
+	if d.Second == 0 {
+		d.Second = Every
 	}
 	return nil
 }
