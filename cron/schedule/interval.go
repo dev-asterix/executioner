@@ -3,32 +3,17 @@ package schedule
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
-// TimeUnit represents the time units for interval calculation.
-const (
-	year timeUnit = iota
-	month
-	week
-	day
-	hour
-	minute
-	second
-	nsec
-)
-
-// interval is a wrapper for scheduler.
-type interval struct {
+// Interval is a wrapper for scheduler.
+type Interval struct {
 	schedule
 }
 
-// timeUnit is custom type for calculating interval by time unit.
-// eg: Year, Month, Week, Day, Hour, Minute, Second, Nsec
-type timeUnit int
-
 // ByFreq returns a new frequency based scheduler.
-func ByFreq(repeat bool, ctx ...context.Context) *interval {
-	return &interval{
+func ByFreq(repeat bool, ctx ...context.Context) *Interval {
+	return &Interval{
 		newSched(repeat, setCtx(ctx)),
 	}
 }
@@ -39,7 +24,7 @@ func ByFreq(repeat bool, ctx ...context.Context) *interval {
 //	...
 //	i.AddYear(10)   // will add 10 years to the scheduler.
 //	...
-func (i interval) AddYear(val int) interval {
+func (i Interval) AddYear(val int) Interval {
 	return i.add(year, val)
 }
 
@@ -49,7 +34,7 @@ func (i interval) AddYear(val int) interval {
 //	...
 //	i.AddMonth(10)   // will add 10 months to the scheduler.
 //	...
-func (i interval) AddMonth(val int) interval {
+func (i Interval) AddMonth(val int) Interval {
 	return i.add(month, val)
 }
 
@@ -59,7 +44,7 @@ func (i interval) AddMonth(val int) interval {
 //	...
 // 	i.AddWeek(2)   // will add 2 weeks to the scheduler.
 //	...
-func (i interval) AddWeek(val int) interval {
+func (i Interval) AddWeek(val int) Interval {
 	return i.add(week, val)
 }
 
@@ -69,7 +54,7 @@ func (i interval) AddWeek(val int) interval {
 //	...
 // 	i.AddDay(3)   // will add 3 days to the scheduler.
 //	...
-func (i interval) AddDay(val int) interval {
+func (i Interval) AddDay(val int) Interval {
 	return i.add(day, val)
 }
 
@@ -79,7 +64,7 @@ func (i interval) AddDay(val int) interval {
 //	...
 // 	i.AddHour(3)   // will add 3 hours to the scheduler.
 //	...
-func (i interval) AddHour(val int) interval {
+func (i Interval) AddHour(val int) Interval {
 	return i.add(hour, val)
 }
 
@@ -89,7 +74,7 @@ func (i interval) AddHour(val int) interval {
 //	...
 // 	i.AddMinute(10)   // will add 10 minutes to the scheduler.
 //	...
-func (i interval) AddMinute(val int) interval {
+func (i Interval) AddMinute(val int) Interval {
 	return i.add(minute, val)
 }
 
@@ -99,7 +84,7 @@ func (i interval) AddMinute(val int) interval {
 //	...
 //	i.AddSecond(10)   // will add 10 seconds to the scheduler.
 //	...
-func (i interval) AddSecond(val int) interval {
+func (i Interval) AddSecond(val int) Interval {
 	return i.add(second, val)
 }
 
@@ -109,7 +94,7 @@ func (i interval) AddSecond(val int) interval {
 //	...
 //	i.AddNsec(1000)   // will add 1000 nano seconds to the scheduler.
 //	...
-func (i interval) AddNsec(val int) interval {
+func (i Interval) AddNsec(val int) Interval {
 	return i.add(nsec, val)
 }
 
@@ -124,7 +109,7 @@ func (i interval) AddNsec(val int) interval {
 // same can be achieved by chaining the calls for convinience :
 //	i.add(Year, 10).add(Week, 2).add(Nsec, 1000) // will add 10 years, 2 weeks and 1000 nano seconds to the scheduler.
 //
-func (i interval) add(units timeUnit, val int) interval {
+func (i Interval) add(units timeUnit, val int) Interval {
 	i.dur.set(units, val)
 	return i
 }
@@ -154,6 +139,38 @@ func (d *duration) set(units timeUnit, val int) {
 	}
 }
 
+// Next finds the next scheduler interval the scheduler and prepare for run
+func (i Interval) Next() (Scheduler, error) {
+
+	// calculate duration to schedule for
+	if dur, err := i.dur.timeUntil(now()); err != nil {
+		return nil, err
+	} else {
+		i.interval = time.Unix(0, dur).In(i.dur.location).Sub(now())
+		return &i, nil
+	}
+}
+
+// timeUntil the duration to schedule for.
+func (d *duration) timeUntil(nextSched time.Time) (dur int64, err error) {
+
+	// add time till next schedule in years, months and days
+	nextSched = nextSched.AddDate(d.Year, d.Month, d.Day+d.date)
+
+	// add duration till next schedule in hours, minutes, seconds and nanoseconds
+	nextSched = nextSched.
+		Add(time.Duration(d.Hour) * time.Hour).
+		Add(time.Duration(d.Minute) * time.Minute).
+		Add(time.Duration(d.Second) * time.Second).
+		Add(time.Duration(d.Nsec) * time.Nanosecond).In(d.location)
+
+	// check if the time is in the past
+	if !nextSched.After(now()) {
+		return dur, fmt.Errorf("time is in the past")
+	}
+	return nextSched.UnixNano(), err
+}
+
 // String returns the string representation of the duration.
 // This indicates how often the scheduler will run.
 // eg:
@@ -163,9 +180,8 @@ func (d *duration) set(units timeUnit, val int) {
 //	...
 // ie, it will run every (10 years, 10 months, 2 weeks, 3 days, 3 hours, 10 minutes, 10 seconds and 1000 nano seconds)
 // until the scheduler is stopped.
-func (i *interval) String() string {
+func (i *Interval) String() string {
 	return fmt.Sprintf(
-		"%dyrs %dmonths %dweeks %ddays %dhrs %dmins %dsecs %dnsecs",
-		i.dur.Year, i.dur.Month, i.dur.Week, i.dur.Day, i.dur.Hour, i.dur.Minute, i.dur.Second, i.dur.Nsec,
-	)
+		"%dyrs %dmonths %dweeks %ddays %dhrs %dmins %dsecs %dnsecs -> next execution in %s",
+		i.dur.Year, i.dur.Month, i.dur.Week, i.dur.Day, i.dur.Hour, i.dur.Minute, i.dur.Second, i.dur.Nsec, i.interval)
 }
