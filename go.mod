@@ -1,4 +1,4 @@
-module github.com/ric-v/executioner
+module github.com/dev-asterix/executioner
 
 go 1.18
 
