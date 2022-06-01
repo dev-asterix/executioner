@@ -265,7 +265,7 @@ reschedule: // reschedule reruns the logic until a valid time is found
 
 	// if no more attempts are left, then return the error
 	if attemptsRem <= 0 {
-		return time.Time{}, d, fmt.Errorf("unable to find a valid upcoming date which can be scheduled matching given conditions.")
+		return time.Time{}, d, fmt.Errorf("unable to find a valid upcoming date which can be scheduled matching given conditions")
 	}
 
 	// set the next date of scheduler
